@@ -240,6 +240,14 @@ function initEventListeners() {
     // Otwieranie modali
     document.getElementById('btnOpenAddModal').addEventListener('click', () => openFilamentModal());
     document.getElementById('btnOpenSettings').addEventListener('click', () => openModal('settingsModal'));
+    document.getElementById('btnOpenBackupModal')?.addEventListener('click', () => {
+        const countBadge = document.getElementById('backupExportCountBadge');
+        if (countBadge) {
+            const count = state.filaments.length;
+            countBadge.textContent = `${count} ${count === 1 ? 'szpula' : (count >= 2 && count <= 4 ? 'szpule' : 'szpul')}`;
+        }
+        openModal('backupModal');
+    });
 
     // Formularz filamentu
     document.getElementById('filamentForm').addEventListener('submit', handleSaveFilament);
@@ -1045,5 +1053,660 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         closeModal('filamentModal');
         closeModal('settingsModal');
+        closeModal('backupModal');
     }
 });
+
+// ------------------------------------------------------------------------------
+// System powiadomień Toast
+// ------------------------------------------------------------------------------
+function showToast(message, type = 'success', duration = 3500) {
+    const container = document.getElementById('toastContainer');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    const borderColor = type === 'success' ? 'border-emerald-500/40 text-emerald-300' :
+                        type === 'error' ? 'border-red-500/40 text-red-300' :
+                        'border-cyan-500/40 text-cyan-300';
+
+    toast.className = `pointer-events-auto flex items-center gap-2.5 px-4 py-3 rounded-xl shadow-2xl text-xs font-medium border bg-slate-900/95 backdrop-blur transition-all duration-300 transform translate-y-2 opacity-0 ${borderColor}`;
+
+    const iconName = type === 'success' ? 'check-circle' : type === 'error' ? 'alert-triangle' : 'info';
+    toast.innerHTML = `<i data-lucide="${iconName}" class="w-4 h-4 flex-shrink-0"></i><span>${escapeHtml(message)}</span>`;
+
+    container.appendChild(toast);
+    initIcons();
+
+    requestAnimationFrame(() => {
+        toast.classList.remove('translate-y-2', 'opacity-0');
+    });
+
+    setTimeout(() => {
+        toast.classList.add('opacity-0', 'translate-y-2');
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
+// ------------------------------------------------------------------------------
+// Pomocnicza funkcja kontrastu kolorów dla arkuszy (YIQ / WCAG)
+// ------------------------------------------------------------------------------
+function getContrastColor(hexColor) {
+    if (!hexColor) {
+        return {
+            bgRgb: '3B82F6',
+            textRgb: 'FFFFFF',
+            bgHex: '#3B82F6',
+            textHex: '#FFFFFF',
+            isDark: true
+        };
+    }
+
+    let hex = String(hexColor).trim().replace(/^#/, '');
+    if (hex.length === 3) {
+        hex = hex.split('').map(c => c + c).join('');
+    }
+    if (hex.length !== 6 || !/^[0-9a-fA-F]{6}$/.test(hex)) {
+        hex = '3B82F6';
+    }
+
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+
+    // Formuła postrzeganej jasności ludzkiego oka (YIQ)
+    const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+    // Wartość graniczna: poniżej 135 kolor uznajemy za ciemny -> czcionka biała (FFFFFF), powyżej -> czcionka ciemna (0F172A)
+    const isDark = yiq < 135;
+
+    return {
+        bgRgb: hex.toUpperCase(),
+        textRgb: isDark ? 'FFFFFF' : '0F172A',
+        bgHex: '#' + hex.toUpperCase(),
+        textHex: isDark ? '#FFFFFF' : '#0F172A',
+        isDark
+    };
+}
+
+// ------------------------------------------------------------------------------
+// Eksport do arkuszy kalkulacyjnych (Excel, CSV, Google Sheets)
+// ------------------------------------------------------------------------------
+function exportToExcel() {
+    if (!state.filaments || state.filaments.length === 0) {
+        showToast('Brak szpul do wyeksportowania.', 'error');
+        return;
+    }
+
+    if (!window.XLSX) {
+        showToast('Biblioteka arkuszy Excel nie załadowała się jeszcze. Pobierz plik CSV.', 'error');
+        return;
+    }
+
+    const data = state.filaments.map((f, index) => {
+        const total = f.weight_total || 1000;
+        const current = f.weight_current != null ? f.weight_current : total;
+        const percentLeft = total > 0 ? Math.round((current / total) * 100) : 0;
+        const contrast = getContrastColor(f.color_hex);
+
+        return {
+            'Lp.': index + 1,
+            'Producent': f.manufacturer || '',
+            'Materiał': f.material || '',
+            'Wersja': f.version || '',
+            'Kolor': f.color_name || '',
+            'Kod HEX': contrast.bgHex,
+            'Pozostało (g)': current,
+            'Waga początkowa (g)': total,
+            'Tara szpuli (g)': f.weight_spool || 220,
+            '% Pozostało': `${percentLeft}%`,
+            'Status': f.status || 'W użyciu',
+            'Lokalizacja': f.location || '',
+            'Temp. dyszy (°C)': f.temp_nozzle || '',
+            'Temp. stołu (°C)': f.temp_bed || '',
+            'Uwagi': f.notes || '',
+            'Data dodania': f.created_at ? new Date(f.created_at).toLocaleString('pl-PL') : ''
+        };
+    });
+
+    const worksheet = window.XLSX.utils.json_to_sheet(data);
+
+    // 1. Stylizacja nagłówków kolumn (Wiersz 0)
+    for (let c = 0; c < 16; c++) {
+        const cellRef = window.XLSX.utils.encode_cell({ c, r: 0 });
+        if (worksheet[cellRef]) {
+            worksheet[cellRef].s = {
+                fill: {
+                    patternType: 'solid',
+                    fgColor: { rgb: '1E293B' } // Ciemny elegancki grafit slate-800
+                },
+                font: {
+                    name: 'Calibri',
+                    sz: 11,
+                    bold: true,
+                    color: { rgb: 'F8FAFC' }
+                },
+                alignment: {
+                    horizontal: 'center',
+                    vertical: 'center'
+                },
+                border: {
+                    top: { style: 'thin', color: { rgb: '334155' } },
+                    bottom: { style: 'medium', color: { rgb: '06B6D4' } }, // Turkusowy pasek akcentu na dole
+                    left: { style: 'thin', color: { rgb: '334155' } },
+                    right: { style: 'thin', color: { rgb: '334155' } }
+                }
+            };
+        }
+    }
+
+    // 2. Stylizacja wierszy danych oraz komórek z kodem koloru
+    state.filaments.forEach((f, index) => {
+        const rowIdx = index + 1;
+        const contrast = getContrastColor(f.color_hex);
+
+        // Standardowe formatowanie komórek w wierszu
+        for (let c = 0; c < 16; c++) {
+            const cellRef = window.XLSX.utils.encode_cell({ c, r: rowIdx });
+            if (!worksheet[cellRef]) continue;
+
+            const isCentered = [0, 5, 6, 7, 8, 9, 10, 12, 13, 15].includes(c);
+
+            worksheet[cellRef].s = {
+                font: {
+                    name: 'Calibri',
+                    sz: 10,
+                    color: { rgb: '0F172A' }
+                },
+                alignment: {
+                    vertical: 'center',
+                    horizontal: isCentered ? 'center' : 'left'
+                },
+                border: {
+                    top: { style: 'thin', color: { rgb: 'E2E8F0' } },
+                    bottom: { style: 'thin', color: { rgb: 'E2E8F0' } },
+                    left: { style: 'thin', color: { rgb: 'E2E8F0' } },
+                    right: { style: 'thin', color: { rgb: 'E2E8F0' } }
+                }
+            };
+        }
+
+        // Pokolorowanie pola "Kod HEX" (Kolumna 5 = F) na kolor filamentu
+        // z automatycznie dobranym kolorem czcionki (biała dla ciemnych, ciemna dla jasnych)
+        const hexCellRef = window.XLSX.utils.encode_cell({ c: 5, r: rowIdx });
+        if (worksheet[hexCellRef]) {
+            worksheet[hexCellRef].s = {
+                fill: {
+                    patternType: 'solid',
+                    fgColor: { rgb: contrast.bgRgb } // Tło w kolorze filamentu
+                },
+                font: {
+                    name: 'Calibri',
+                    sz: 10,
+                    bold: true,
+                    color: { rgb: contrast.textRgb } // Odpowiednio jasny lub ciemny kolor tekstu
+                },
+                alignment: {
+                    horizontal: 'center',
+                    vertical: 'center'
+                },
+                border: {
+                    top: { style: 'medium', color: { rgb: contrast.isDark ? '64748B' : '94A3B8' } },
+                    bottom: { style: 'medium', color: { rgb: contrast.isDark ? '64748B' : '94A3B8' } },
+                    left: { style: 'medium', color: { rgb: contrast.isDark ? '64748B' : '94A3B8' } },
+                    right: { style: 'medium', color: { rgb: contrast.isDark ? '64748B' : '94A3B8' } }
+                }
+            };
+        }
+    });
+
+    // Dopasowanie szerokości kolumn dla czytelności
+    worksheet['!cols'] = [
+        { wch: 6 },   // Lp.
+        { wch: 18 },  // Producent
+        { wch: 13 },  // Materiał
+        { wch: 15 },  // Wersja
+        { wch: 22 },  // Kolor
+        { wch: 14 },  // Kod HEX (zwiększona szerokość dla czytelnego kafelka koloru)
+        { wch: 15 },  // Pozostało
+        { wch: 19 },  // Waga początkowa
+        { wch: 15 },  // Tara szpuli
+        { wch: 13 },  // % Pozostało
+        { wch: 14 },  // Status
+        { wch: 20 },  // Lokalizacja
+        { wch: 16 },  // Temp. dyszy
+        { wch: 16 },  // Temp. stołu
+        { wch: 35 },  // Uwagi
+        { wch: 20 }   // Data dodania
+    ];
+
+    const workbook = window.XLSX.utils.book_new();
+    window.XLSX.utils.book_append_sheet(workbook, worksheet, 'Filamenty 3D');
+
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    window.XLSX.writeFile(workbook, `filamenty_baza_${dateStr}.xlsx`);
+    showToast('Wygenerowano i pobrano kolorowy arkusz Excel (.xlsx)!', 'success');
+}
+
+function exportToCsv() {
+    if (!state.filaments || state.filaments.length === 0) {
+        showToast('Brak szpul do wyeksportowania.', 'error');
+        return;
+    }
+
+    const headers = [
+        'Lp.', 'Producent', 'Materiał', 'Wersja', 'Kolor', 'Kod HEX',
+        'Pozostało (g)', 'Waga całkowita (g)', 'Tara szpuli (g)', '% Pozostało',
+        'Status', 'Lokalizacja', 'Temp dyszy (°C)', 'Temp stołu (°C)', 'Uwagi', 'Data dodania'
+    ];
+
+    const escapeCsv = (val) => {
+        if (val === null || val === undefined) return '""';
+        const str = String(val).replace(/"/g, '""');
+        return `"${str}"`;
+    };
+
+    const rows = state.filaments.map((f, i) => {
+        const total = f.weight_total || 1000;
+        const current = f.weight_current != null ? f.weight_current : total;
+        const percentLeft = total > 0 ? Math.round((current / total) * 100) : 0;
+        const dateStr = f.created_at ? new Date(f.created_at).toLocaleString('pl-PL') : '';
+        const contrast = getContrastColor(f.color_hex);
+
+        return [
+            i + 1,
+            escapeCsv(f.manufacturer),
+            escapeCsv(f.material),
+            escapeCsv(f.version),
+            escapeCsv(f.color_name),
+            escapeCsv(contrast.bgHex),
+            current,
+            total,
+            f.weight_spool || 220,
+            `${percentLeft}%`,
+            escapeCsv(f.status),
+            escapeCsv(f.location),
+            escapeCsv(f.temp_nozzle),
+            escapeCsv(f.temp_bed),
+            escapeCsv(f.notes),
+            escapeCsv(dateStr)
+        ].join(';');
+    });
+
+    // \uFEFF to znacznik UTF-8 BOM, dzięki któremu Excel i Sheets od razu prawidłowo otwierają polskie znaki
+    const csvContent = '\uFEFF' + [headers.join(';'), ...rows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    a.href = url;
+    a.download = `filamenty_arkusz_${dateStr}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    showToast('Pobrano plik CSV (zoptymalizowany dla Excel i Sheets)!', 'success');
+}
+
+async function copyForGoogleSheets() {
+    if (!state.filaments || state.filaments.length === 0) {
+        showToast('Brak szpul do skopiowania.', 'error');
+        return;
+    }
+
+    const headers = [
+        'Lp.', 'Producent', 'Materiał', 'Wersja', 'Kolor', 'Kod HEX',
+        'Pozostało (g)', 'Waga całkowita (g)', 'Tara szpuli (g)', '% Pozostało',
+        'Status', 'Lokalizacja', 'Temp dyszy (°C)', 'Temp stołu (°C)', 'Uwagi', 'Data dodania'
+    ];
+
+    const cleanTsv = (val) => String(val ?? '').replace(/[\t\r\n]+/g, ' ');
+
+    // 1. Zwykły format tekstowy TSV (uniwersalny fallback)
+    const tsvRows = state.filaments.map((f, i) => {
+        const total = f.weight_total || 1000;
+        const current = f.weight_current != null ? f.weight_current : total;
+        const percentLeft = total > 0 ? Math.round((current / total) * 100) : 0;
+        const dateStr = f.created_at ? new Date(f.created_at).toLocaleString('pl-PL') : '';
+        const contrast = getContrastColor(f.color_hex);
+
+        return [
+            i + 1,
+            cleanTsv(f.manufacturer),
+            cleanTsv(f.material),
+            cleanTsv(f.version),
+            cleanTsv(f.color_name),
+            contrast.bgHex,
+            current,
+            total,
+            f.weight_spool || 220,
+            `${percentLeft}%`,
+            cleanTsv(f.status),
+            cleanTsv(f.location),
+            cleanTsv(f.temp_nozzle),
+            cleanTsv(f.temp_bed),
+            cleanTsv(f.notes),
+            dateStr
+        ].join('\t');
+    });
+    const tsvContent = [headers.join('\t'), ...tsvRows].join('\n');
+
+    // 2. Format HTML ze stylami i kolorami komórek (Google Sheets wkleja kolory z HTML!)
+    const htmlRows = state.filaments.map((f, i) => {
+        const total = f.weight_total || 1000;
+        const current = f.weight_current != null ? f.weight_current : total;
+        const percentLeft = total > 0 ? Math.round((current / total) * 100) : 0;
+        const dateStr = f.created_at ? new Date(f.created_at).toLocaleString('pl-PL') : '';
+        const contrast = getContrastColor(f.color_hex);
+
+        return `<tr>
+            <td style="text-align: center; border: 1px solid #cbd5e1; padding: 4px 8px;">${i + 1}</td>
+            <td style="border: 1px solid #cbd5e1; padding: 4px 8px;">${escapeHtml(f.manufacturer || '')}</td>
+            <td style="border: 1px solid #cbd5e1; padding: 4px 8px;">${escapeHtml(f.material || '')}</td>
+            <td style="border: 1px solid #cbd5e1; padding: 4px 8px;">${escapeHtml(f.version || '')}</td>
+            <td style="border: 1px solid #cbd5e1; padding: 4px 8px;">${escapeHtml(f.color_name || '')}</td>
+            <td style="background-color: ${contrast.bgHex}; color: ${contrast.textHex}; font-weight: bold; text-align: center; border: 1px solid #64748b; padding: 4px 8px; font-family: monospace;">${escapeHtml(contrast.bgHex)}</td>
+            <td style="text-align: right; border: 1px solid #cbd5e1; padding: 4px 8px;">${current}</td>
+            <td style="text-align: right; border: 1px solid #cbd5e1; padding: 4px 8px;">${total}</td>
+            <td style="text-align: right; border: 1px solid #cbd5e1; padding: 4px 8px;">${f.weight_spool || 220}</td>
+            <td style="text-align: center; border: 1px solid #cbd5e1; padding: 4px 8px;">${percentLeft}%</td>
+            <td style="text-align: center; border: 1px solid #cbd5e1; padding: 4px 8px;">${escapeHtml(f.status || 'W użyciu')}</td>
+            <td style="border: 1px solid #cbd5e1; padding: 4px 8px;">${escapeHtml(f.location || '')}</td>
+            <td style="text-align: center; border: 1px solid #cbd5e1; padding: 4px 8px;">${escapeHtml(f.temp_nozzle || '')}</td>
+            <td style="text-align: center; border: 1px solid #cbd5e1; padding: 4px 8px;">${escapeHtml(f.temp_bed || '')}</td>
+            <td style="border: 1px solid #cbd5e1; padding: 4px 8px;">${escapeHtml(f.notes || '')}</td>
+            <td style="text-align: center; border: 1px solid #cbd5e1; padding: 4px 8px;">${escapeHtml(dateStr)}</td>
+        </tr>`;
+    }).join('\n');
+
+    const htmlContent = `<table>
+        <thead>
+            <tr style="background-color: #1e293b; color: #ffffff; font-weight: bold; text-align: center;">
+                ${headers.map(h => `<th style="padding: 6px 10px; border: 1px solid #475569;">${escapeHtml(h)}</th>`).join('')}
+            </tr>
+        </thead>
+        <tbody>
+            ${htmlRows}
+        </tbody>
+    </table>`;
+
+    try {
+        if (navigator.clipboard && window.ClipboardItem) {
+            const blobHtml = new Blob([htmlContent], { type: 'text/html' });
+            const blobText = new Blob([tsvContent], { type: 'text/plain' });
+            await navigator.clipboard.write([
+                new ClipboardItem({
+                    'text/html': blobHtml,
+                    'text/plain': blobText
+                })
+            ]);
+            showToast('Skopiowano tabelę z kolorami! Wklej ją w Google Sheets (Ctrl+V).', 'success', 5000);
+            return;
+        }
+    } catch (e) {
+        console.warn('ClipboardItem text/html niedostępny, używam czystego tekstu:', e);
+    }
+
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(tsvContent);
+        } else {
+            const ta = document.createElement('textarea');
+            ta.value = tsvContent;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+        }
+        showToast('Skopiowano tabelę do schowka! Wklej ją w Google Sheets (Ctrl+V).', 'success', 5000);
+    } catch (err) {
+        showToast('Nie udało się skopiować do schowka: ' + err.message, 'error');
+    }
+}
+
+// ------------------------------------------------------------------------------
+// Kopia zapasowa (Backup JSON & Udostępnianie do Chmury)
+// ------------------------------------------------------------------------------
+function generateBackupObject() {
+    return {
+        app: '3D Filament Tracker',
+        version: '1.0',
+        exported_at: new Date().toISOString(),
+        total_spools: state.filaments.length,
+        filaments: state.filaments
+    };
+}
+
+function downloadBackupJson() {
+    if (!state.filaments || state.filaments.length === 0) {
+        showToast('Baza jest pusta — brak danych do kopii.', 'error');
+        return;
+    }
+
+    const backupObj = generateBackupObject();
+    const jsonStr = JSON.stringify(backupObj, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const now = new Date();
+    const dateFormatted = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}-${String(now.getMinutes()).padStart(2,'0')}`;
+    a.href = url;
+    a.download = `filament_tracker_backup_${dateFormatted}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    showToast('Pobrano plik kopii zapasowej (.json)!', 'success');
+}
+
+async function shareBackupToCloud() {
+    if (!state.filaments || state.filaments.length === 0) {
+        showToast('Baza jest pusta — brak danych do kopii.', 'error');
+        return;
+    }
+
+    const backupObj = generateBackupObject();
+    const jsonStr = JSON.stringify(backupObj, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const now = new Date();
+    const dateFormatted = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}-${String(now.getMinutes()).padStart(2,'0')}`;
+    const fileName = `filament_tracker_backup_${dateFormatted}.json`;
+
+    // 1. Sprawdź Web Share API (dostępne w nowoczesnych przeglądarkach, smartfonach i Windows 10/11)
+    try {
+        const file = new File([blob], fileName, { type: 'application/json' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({
+                title: 'Filament Tracker - Kopia bazy',
+                text: `Kopia zapasowa bazy filamentów (${backupObj.total_spools} szpul)`,
+                files: [file]
+            });
+            showToast('Udostępniono plik kopii zapasowej!', 'success');
+            return;
+        }
+    } catch (shareErr) {
+        if (shareErr.name === 'AbortError') return; // Użytkownik zamknął okno
+        console.warn('Web Share API niedostępne lub błąd:', shareErr);
+    }
+
+    // 2. Jeśli bezpośrednie okno udostępniania plików nie jest wspierane, pobierz plik i wyświetl pomoc
+    downloadBackupJson();
+    showToast('Pobrano plik kopii! Przeciągnij go teraz do Google Drive lub OneDrive.', 'info', 6000);
+}
+
+// ------------------------------------------------------------------------------
+// Awaryjne przywracanie bazy (Disaster Recovery / Restore)
+// ------------------------------------------------------------------------------
+let pendingRestoreData = null;
+
+function handleRestoreFileSelect(event) {
+    const file = event.target.files?.[0];
+    const infoBox = document.getElementById('restoreFileInfo');
+    const statusDiv = document.getElementById('restoreStatusResult');
+    statusDiv.classList.add('hidden');
+
+    if (!file) {
+        pendingRestoreData = null;
+        infoBox.classList.add('hidden');
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const parsed = JSON.parse(e.target.result);
+            let items = null;
+
+            if (Array.isArray(parsed)) {
+                items = parsed;
+            } else if (parsed && Array.isArray(parsed.filaments)) {
+                items = parsed.filaments;
+            } else if (parsed && Array.isArray(parsed.data)) {
+                items = parsed.data;
+            }
+
+            if (!items || items.length === 0) {
+                throw new Error('Plik nie zawiera listy szpul lub lista jest pusta.');
+            }
+
+            // Podstawowa weryfikacja rekordów
+            const sample = items[0];
+            if (!sample.manufacturer && !sample.material && !sample.color_name) {
+                throw new Error('Plik nie zawiera poprawnych rekordów szpul (brak podstawowych pól).');
+            }
+
+            pendingRestoreData = items;
+
+            document.getElementById('restoreFileName').textContent = file.name;
+            const exportDate = parsed.exported_at ? new Date(parsed.exported_at).toLocaleString('pl-PL') : 'brak daty w pliku';
+            document.getElementById('restoreFileMeta').textContent = `Liczba szpul w pliku: ${items.length} | Data kopii: ${exportDate}`;
+            infoBox.classList.remove('hidden');
+            initIcons();
+        } catch (err) {
+            pendingRestoreData = null;
+            infoBox.classList.add('hidden');
+            statusDiv.className = 'mt-3 text-xs p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 block';
+            statusDiv.innerHTML = `<i data-lucide="alert-triangle" class="w-4 h-4 inline mr-1 text-red-400"></i> Błąd odczytu pliku: ${escapeHtml(err.message)}`;
+            initIcons();
+        }
+    };
+    reader.readAsText(file);
+}
+
+async function executeRestore() {
+    if (!pendingRestoreData || pendingRestoreData.length === 0) {
+        showToast('Wybierz najpierw poprawny plik kopii zapasowej.', 'error');
+        return;
+    }
+
+    const mode = document.querySelector('input[name="restoreMode"]:checked')?.value || 'replace';
+    const statusDiv = document.getElementById('restoreStatusResult');
+    const restoreBtn = document.getElementById('btnExecuteRestore');
+    const restoreLabel = document.getElementById('btnRestoreLabel');
+
+    if (mode === 'replace') {
+        const confirmMsg = `UWAGA: Wybrano opcję „Zastąp całą bazę”.\n\nWszystkie obecne szpule w bazie (${state.filaments.length}) zostaną USUNIĘTE i zastąpione danymi z kopii zapasowej (${pendingRestoreData.length} szpul).\n\nCzy na pewno chcesz kontynuować?`;
+        if (!confirm(confirmMsg)) {
+            return;
+        }
+    }
+
+    restoreBtn.disabled = true;
+    restoreLabel.textContent = 'Przywracanie danych...';
+    statusDiv.className = 'mt-3 text-xs p-2.5 rounded-lg bg-slate-800 text-slate-300 block';
+    statusDiv.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 inline animate-spin mr-1 text-cyan-400"></i> Trwa zapisywanie szpul w bazie...';
+    initIcons();
+
+    try {
+        const sanitizedItems = pendingRestoreData.map(item => {
+            const clean = {
+                manufacturer: String(item.manufacturer || 'Nieznany').trim(),
+                material: String(item.material || 'PLA').trim(),
+                version: item.version ? String(item.version).trim() : null,
+                color_name: String(item.color_name || 'Brak koloru').trim(),
+                color_hex: item.color_hex && item.color_hex.startsWith('#') ? item.color_hex : '#3b82f6',
+                location: String(item.location || 'Domyślna').trim(),
+                weight_total: parseInt(item.weight_total) || 1000,
+                weight_current: item.weight_current !== undefined ? parseInt(item.weight_current) : 1000,
+                weight_spool: parseInt(item.weight_spool) || 220,
+                temp_nozzle: item.temp_nozzle ? String(item.temp_nozzle).trim() : null,
+                temp_bed: item.temp_bed ? String(item.temp_bed).trim() : null,
+                status: item.status || 'W użyciu',
+                notes: item.notes ? String(item.notes).trim() : null
+            };
+
+            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id);
+            if (isUuid && mode === 'replace') {
+                clean.id = item.id;
+            }
+            if (item.created_at) {
+                clean.created_at = item.created_at;
+            }
+            return clean;
+        });
+
+        if (state.isOnline && state.supabaseClient) {
+            if (mode === 'replace') {
+                // Usuń wszystkie istniejące szpule
+                const { error: delError } = await state.supabaseClient
+                    .from('filaments')
+                    .delete()
+                    .neq('id', '00000000-0000-0000-0000-000000000000');
+                if (delError) throw delError;
+            }
+
+            // Wstawiaj partiami po 50 sztuk
+            const chunkSize = 50;
+            for (let i = 0; i < sanitizedItems.length; i += chunkSize) {
+                const chunk = sanitizedItems.slice(i, i + chunkSize);
+                const { error: insError } = await state.supabaseClient
+                    .from('filaments')
+                    .insert(chunk);
+                if (insError) throw insError;
+            }
+
+            await connectAndLoad();
+        } else {
+            if (mode === 'replace') {
+                state.filaments = sanitizedItems.map((item, idx) => ({
+                    ...item,
+                    id: item.id || `demo-restored-${Date.now()}-${idx}`,
+                    created_at: item.created_at || new Date().toISOString()
+                }));
+            } else {
+                const newItems = sanitizedItems.map((item, idx) => ({
+                    ...item,
+                    id: `demo-restored-${Date.now()}-${idx}`,
+                    created_at: item.created_at || new Date().toISOString()
+                }));
+                state.filaments = [...newItems, ...state.filaments];
+            }
+            localStorage.setItem('filament_demo_items', JSON.stringify(state.filaments));
+            render();
+        }
+
+        statusDiv.className = 'mt-3 text-xs p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 block';
+        statusDiv.innerHTML = `✓ Pomyślnie przywrócono ${sanitizedItems.length} szpul do bazy danych!`;
+        showToast(`Przywrócono ${sanitizedItems.length} szpul!`, 'success');
+
+        pendingRestoreData = null;
+        document.getElementById('restoreFileInput').value = '';
+        setTimeout(() => {
+            document.getElementById('restoreFileInfo').classList.add('hidden');
+        }, 2000);
+
+    } catch (err) {
+        console.error('Błąd przywracania bazy:', err);
+        statusDiv.className = 'mt-3 text-xs p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 block';
+        statusDiv.innerHTML = `✕ Błąd przywracania: ${escapeHtml(err.message)}`;
+        showToast('Błąd podczas przywracania bazy danych.', 'error');
+    } finally {
+        restoreBtn.disabled = false;
+        restoreLabel.textContent = 'Przywróć dane do bazy';
+        initIcons();
+    }
+}
