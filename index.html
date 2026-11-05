@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="pl" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Filament Tracker | Baza Filamentów</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        dark: {
+                            900: '#0f172a',
+                            800: '#1e293b',
+                            700: '#334155',
+                            600: '#475569'
+                        },
+                        brand: {
+                            500: '#06b6d4',
+                            600: '#0891b2',
+                            700: '#0e7490'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Supabase JS Client v2 -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        /* Płynne animacje i style niestandardowe */
+        .color-swatch-ring {
+            box-shadow: 0 0 0 2px rgba(255,255,255,0.2), 0 2px 4px rgba(0,0,0,0.4);
+        }
+        input[type="color"]::-webkit-color-swatch-wrapper {
+            padding: 0;
+        }
+        input[type="color"]::-webkit-color-swatch {
+            border: none;
+            border-radius: 6px;
+        }
+        /* Custom scrollbars */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
+
+    <!-- Pasek górny (Nawigacja) -->
+    <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+            <!-- Logo -->
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-white shadow-lg shadow-cyan-500/20">
+                    <i data-lucide="disc" class="w-6 h-6 animate-spin-slow"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg leading-tight flex items-center gap-2">
+                        Filament Tracker
+                        <span id="connectionBadge" class="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                            Sprawdzanie...
+                        </span>
+                    </h1>
+                    <p class="text-xs text-slate-400 hidden sm:block">Zarządzanie szpulami do druku 3D online</p>
+                </div>
+            </div>
+
+            <!-- Podsumowanie w nagłówku (Statystyki) -->
+            <div class="hidden md:flex items-center gap-6 text-xs text-slate-400 border-x border-slate-800 px-6">
+                <div>
+                    Szpule: <strong id="statTotalSpools" class="text-slate-100 text-sm">0</strong>
+                </div>
+                <div>
+                    Pozostało: <strong id="statTotalWeight" class="text-cyan-400 text-sm">0 kg</strong>
+                </div>
+                <div>
+                    Aktywne: <strong id="statActiveSpools" class="text-emerald-400 text-sm">0</strong>
+                </div>
+            </div>
+
+            <!-- Przyciski akcji -->
+            <div class="flex items-center gap-2.5">
+                <button id="btnOpenSettings" title="Konfiguracja połączenia z Supabase"
+                    class="p-2.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 hover:text-cyan-400 text-slate-300 transition-colors">
+                    <i data-lucide="settings" class="w-4 h-4"></i>
+                </button>
+
+                <button id="btnOpenAddModal"
+                    class="flex items-center gap-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-medium px-4 py-2 rounded-lg shadow-lg shadow-cyan-500/20 transition-all text-sm">
+                    <i data-lucide="plus-circle" class="w-4 h-4"></i>
+                    <span>Dodaj szpulę</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Główna zawartość -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+
+        <!-- Komunikat o braku połączenia z Supabase (jeśli brak kluczy) -->
+        <div id="unconfiguredBanner" class="hidden mb-6 p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div class="flex items-start gap-3">
+                <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-400 mt-0.5 flex-shrink-0"></i>
+                <div>
+                    <h3 class="font-semibold text-amber-300">Aplikacja działa w trybie demonstracyjnym</h3>
+                    <p class="text-sm text-amber-200/80">Aby zapisywać i synchronizować szpule w darmowej chmurze Supabase, podaj adres URL i klucz Anon.</p>
+                </div>
+            </div>
+            <button onclick="document.getElementById('btnOpenSettings').click()" class="whitespace-nowrap px-4 py-1.5 rounded-lg bg-amber-500 text-slate-950 font-semibold text-xs hover:bg-amber-400 transition-colors">
+                Połącz z Supabase
+            </button>
+        </div>
+
+        <!-- Pasek filtrów, wyszukiwania i przełączania widoków (Przyklejony / Sticky) -->
+        <div class="sticky top-16 z-20 bg-slate-950/95 backdrop-blur-md pt-2 pb-3 -mt-2 mb-4">
+            <div class="bg-slate-900/95 border border-slate-800 p-3.5 sm:p-4 rounded-2xl shadow-xl space-y-3 backdrop-blur">
+                
+                <!-- Górna linia: Wyszukiwanie, Sortowanie, Przełącznik widoku -->
+                <div class="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+                    <!-- Pole wyszukiwania -->
+                    <div class="relative flex-1">
+                        <i data-lucide="search" class="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2"></i>
+                        <input type="text" id="searchInput" placeholder="Szukaj: producent, materiał, wersja, kolor, lokalizacja..."
+                            class="w-full pl-10 pr-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 placeholder-slate-500">
+                    </div>
+
+                    <!-- Sortowanie i widok -->
+                    <div class="flex items-center gap-2 justify-between sm:justify-end">
+                        <select id="sortBy" class="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500 text-slate-300">
+                            <option value="newest">Najnowsze</option>
+                            <option value="material_asc">Materiał (A-Z)</option>
+                            <option value="color_asc">Kolor (A-Z)</option>
+                            <option value="producer_asc">Producent (A-Z)</option>
+                            <option value="weight_asc">Waga: od najmniejszej</option>
+                            <option value="weight_desc">Waga: od największej</option>
+                        </select>
+
+                        <div class="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
+                            <button id="viewGridBtn" title="Widok kafelków" class="p-1.5 rounded-lg text-slate-500 hover:text-slate-200 transition-colors">
+                                <i data-lucide="layout-grid" class="w-4 h-4"></i>
+                            </button>
+                            <button id="viewTableBtn" title="Widok listy (tabela)" class="p-1.5 rounded-lg bg-slate-800 text-cyan-400 transition-colors">
+                                <i data-lucide="list" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dolna linia: Filtry wielokrotnego wyboru (Materiały, Producenci, Kolory, Lokalizacje, Status) -->
+                <div class="pt-2 border-t border-slate-800/80 flex flex-wrap items-center gap-2">
+                    <span class="text-xs text-slate-500 flex items-center gap-1 mr-1">
+                        <i data-lucide="filter" class="w-3.5 h-3.5"></i>
+                        Filtruj:
+                    </span>
+
+                    <!-- Filtr Materiał -->
+                    <div class="relative filter-dropdown-container">
+                        <button type="button" id="btnFilter_materials" onclick="toggleFilterMenu('materials')" class="filter-dropdown-btn bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 hover:border-slate-700 flex items-center gap-2 transition-all">
+                            <span id="label_materials">Materiał (wszystkie)</span>
+                            <i data-lucide="chevron-down" class="w-3 h-3 text-slate-500 flex-shrink-0"></i>
+                        </button>
+                        <div id="menu_materials" class="hidden absolute left-0 top-full mt-1.5 w-52 max-h-60 overflow-y-auto bg-slate-900 border border-slate-800 rounded-xl shadow-2xl z-40 p-2 space-y-1"></div>
+                    </div>
+
+                    <!-- Filtr Producent -->
+                    <div class="relative filter-dropdown-container">
+                        <button type="button" id="btnFilter_manufacturers" onclick="toggleFilterMenu('manufacturers')" class="filter-dropdown-btn bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 hover:border-slate-700 flex items-center gap-2 transition-all">
+                            <span id="label_manufacturers">Producent (wszyscy)</span>
+                            <i data-lucide="chevron-down" class="w-3 h-3 text-slate-500 flex-shrink-0"></i>
+                        </button>
+                        <div id="menu_manufacturers" class="hidden absolute left-0 top-full mt-1.5 w-56 max-h-60 overflow-y-auto bg-slate-900 border border-slate-800 rounded-xl shadow-2xl z-40 p-2 space-y-1"></div>
+                    </div>
+
+                    <!-- Filtr Kolor (z próbkami kolorów!) -->
+                    <div class="relative filter-dropdown-container">
+                        <button type="button" id="btnFilter_colors" onclick="toggleFilterMenu('colors')" class="filter-dropdown-btn bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 hover:border-slate-700 flex items-center gap-2 transition-all">
+                            <span id="label_colors">Kolor (wszystkie)</span>
+                            <i data-lucide="chevron-down" class="w-3 h-3 text-slate-500 flex-shrink-0"></i>
+                        </button>
+                        <div id="menu_colors" class="hidden absolute left-0 top-full mt-1.5 w-56 max-h-60 overflow-y-auto bg-slate-900 border border-slate-800 rounded-xl shadow-2xl z-40 p-2 space-y-1"></div>
+                    </div>
+
+                    <!-- Filtr Lokalizacja -->
+                    <div class="relative filter-dropdown-container">
+                        <button type="button" id="btnFilter_locations" onclick="toggleFilterMenu('locations')" class="filter-dropdown-btn bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 hover:border-slate-700 flex items-center gap-2 transition-all">
+                            <span id="label_locations">Lokalizacja (wszystkie)</span>
+                            <i data-lucide="chevron-down" class="w-3 h-3 text-slate-500 flex-shrink-0"></i>
+                        </button>
+                        <div id="menu_locations" class="hidden absolute left-0 top-full mt-1.5 w-56 max-h-60 overflow-y-auto bg-slate-900 border border-slate-800 rounded-xl shadow-2xl z-40 p-2 space-y-1"></div>
+                    </div>
+
+                    <!-- Filtr Status -->
+                    <div class="relative filter-dropdown-container">
+                        <button type="button" id="btnFilter_statuses" onclick="toggleFilterMenu('statuses')" class="filter-dropdown-btn bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 hover:border-slate-700 flex items-center gap-2 transition-all">
+                            <span id="label_statuses">Status (wszystkie)</span>
+                            <i data-lucide="chevron-down" class="w-3 h-3 text-slate-500 flex-shrink-0"></i>
+                        </button>
+                        <div id="menu_statuses" class="hidden absolute left-0 top-full mt-1.5 w-52 max-h-60 overflow-y-auto bg-slate-900 border border-slate-800 rounded-xl shadow-2xl z-40 p-2 space-y-1"></div>
+                    </div>
+
+                    <!-- Przycisk resetu wszystkich filtrów -->
+                    <button type="button" id="btnResetFilters" onclick="resetAllFilters()" class="hidden px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-red-400 text-xs flex items-center gap-1 transition-colors sm:ml-auto">
+                        <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                        <span>Wyczyść filtry</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stan ładowania -->
+        <div id="loadingState" class="py-20 text-center flex flex-col items-center justify-center">
+            <i data-lucide="loader-2" class="w-10 h-10 text-cyan-500 animate-spin mb-4"></i>
+            <p class="text-slate-400 text-sm">Wczytywanie listy filamentów...</p>
+        </div>
+
+        <!-- Stan pusty (Brak wyników) -->
+        <div id="emptyState" class="hidden py-16 text-center border-2 border-dashed border-slate-800 rounded-3xl p-8">
+            <div class="w-14 h-14 bg-slate-900 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-500">
+                <i data-lucide="package-open" class="w-8 h-8"></i>
+            </div>
+            <h3 class="text-base font-semibold text-slate-300 mb-1">Brak filamentów do wyświetlenia</h3>
+            <p class="text-sm text-slate-500 max-w-sm mx-auto mb-5">Nie znaleziono szpul spełniających wybrane kryteria lub Twoja baza jest jeszcze pusta.</p>
+            <button onclick="document.getElementById('btnOpenAddModal').click()" class="inline-flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-cyan-400 font-medium text-xs rounded-xl border border-slate-700 transition-colors">
+                <i data-lucide="plus" class="w-4 h-4"></i>
+                Dodaj swoją pierwszą szpulę
+            </button>
+        </div>
+
+        <!-- Kontener: Widok Kafelków (Grid - zmniejszone o połowę) -->
+        <div id="gridContainer" class="hidden grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+            <!-- Karty będą generowane dynamicznie przez JavaScript -->
+        </div>
+
+        <!-- Kontener: Widok Listy / Tabeli -->
+        <div id="tableContainer" class="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-900">
+            <table class="w-full text-left text-sm">
+                <thead class="bg-slate-950/70 border-b border-slate-800 text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                    <tr>
+                        <th class="p-4">Kolor</th>
+                        <th class="p-4">Producent</th>
+                        <th class="p-4">Materiał & Wersja</th>
+                        <th class="p-4">Lokalizacja</th>
+                        <th class="p-4">Pozostało</th>
+                        <th class="p-4">Status</th>
+                        <th class="p-4 text-right">Akcje</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody" class="divide-y divide-slate-800/60">
+                    <!-- Wiersze generowane dynamicznie -->
+                </tbody>
+            </table>
+        </div>
+
+    </main>
+
+    <!-- Stopka -->
+    <footer class="border-t border-slate-800 bg-slate-900/50 py-4 mt-8 text-center text-xs text-slate-500">
+        <p>3D Filament Tracker &bull; Połączony z bazą Supabase Cloud &bull; Działa na komputerze i w telefonie</p>
+    </footer>
+
+    <!-- ===================================================================== -->
+    <!-- MODAL: Dodaj / Edytuj szpulę                                          -->
+    <!-- ===================================================================== -->
+    <div id="filamentModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden overflow-y-auto">
+        <div class="bg-slate-900 border border-slate-800 w-full max-w-xl rounded-2xl shadow-2xl p-6 relative max-h-[92vh] flex flex-col">
+            
+            <div class="flex items-center justify-between border-b border-slate-800 pb-4 mb-4">
+                <h2 id="modalTitle" class="text-lg font-bold text-slate-100 flex items-center gap-2">
+                    <i data-lucide="plus-circle" class="w-5 h-5 text-cyan-400"></i>
+                    Dodaj nową szpulę
+                </h2>
+                <button type="button" onclick="closeModal('filamentModal')" class="text-slate-400 hover:text-slate-200">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <form id="filamentForm" class="space-y-4 overflow-y-auto pr-1 flex-1">
+                <input type="hidden" id="filamentId" value="">
+
+                <!-- 1. Producent & 2. Materiał -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">
+                            1. Producent <span class="text-red-400">*</span>
+                        </label>
+                        <input type="text" id="formManufacturer" list="manufacturersList" required placeholder="np. Devil Design, Sunlu, Fiberlogy"
+                            class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-cyan-500">
+                        <datalist id="manufacturersList"></datalist>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">
+                            2. Materiał <span class="text-red-400">*</span>
+                        </label>
+                        <input type="text" id="formMaterial" list="materialsList" required placeholder="np. PLA, PETG, TPU 95A, ASA"
+                            class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-cyan-500">
+                        <datalist id="materialsList"></datalist>
+                    </div>
+                </div>
+
+                <!-- 3. Wersja & 4. Kolor -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">
+                            3. Wersja / Wariant
+                        </label>
+                        <input type="text" id="formVersion" list="versionsList" placeholder="np. Matte, High Speed, Meta, Silk"
+                            class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-cyan-500">
+                        <datalist id="versionsList"></datalist>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">
+                            4. Kolor <span class="text-red-400">*</span>
+                        </label>
+                        <div class="flex items-center gap-2">
+                            <input type="color" id="formColorHex" value="#3b82f6" title="Wybierz barwę do wizualizacji"
+                                class="w-10 h-9.5 rounded-lg border border-slate-700 bg-transparent cursor-pointer p-0.5">
+                            <input type="text" id="formColorName" required placeholder="Nazwa koloru, np. Czarny, Ruby Red"
+                                class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-cyan-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 5. Lokalizacja -->
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">
+                        5. Lokalizacja <span class="text-red-400">*</span>
+                    </label>
+                    <input type="text" id="formLocation" list="locationsList" required placeholder="np. Półka A, Pudełko próżniowe 2, Szafka B"
+                        class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-cyan-500">
+                    <datalist id="locationsList"></datalist>
+                </div>
+
+                <!-- Wagi i Stan (Kalkulator) -->
+                <div class="p-3.5 bg-slate-950/70 rounded-xl border border-slate-800/80 space-y-3">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-semibold text-cyan-400 flex items-center gap-1.5">
+                            <i data-lucide="scale" class="w-3.5 h-3.5"></i>
+                            Waga i Stan szpuli
+                        </span>
+                        <span class="text-[11px] text-slate-400">w gramach (g)</span>
+                    </div>
+
+                    <div class="grid grid-cols-3 gap-2">
+                        <div>
+                            <label class="block text-[11px] text-slate-400 mb-0.5">Początkowa netto</label>
+                            <input type="number" id="formWeightTotal" value="1000" step="50"
+                                class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500">
+                        </div>
+                        <div>
+                            <label class="block text-[11px] text-slate-400 mb-0.5">Pozostało netto</label>
+                            <input type="number" id="formWeightCurrent" value="1000" step="10"
+                                class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs font-bold text-cyan-400 focus:outline-none focus:border-cyan-500">
+                        </div>
+                        <div>
+                            <label class="block text-[11px] text-slate-400 mb-0.5">Tara szpuli (pusta)</label>
+                            <input type="number" id="formWeightSpool" value="220" step="5"
+                                class="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-400 focus:outline-none focus:border-cyan-500">
+                        </div>
+                    </div>
+
+                    <!-- Minikalkulator ważenia kuchennego -->
+                    <div class="pt-2 border-t border-slate-800 flex items-center justify-between gap-2 text-xs">
+                        <span class="text-slate-400 text-[11px]">Zważyłeś całą szpulę na wadze?</span>
+                        <div class="flex items-center gap-1.5">
+                            <input type="number" id="calcGrossInput" placeholder="Waga brutto" class="w-24 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs">
+                            <button type="button" id="btnCalculateNet" class="px-2 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-medium">
+                                Oblicz
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Temperatury i Status -->
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                        <label class="block text-xs text-slate-300 mb-1">Temp. dyszy (°C)</label>
+                        <input type="text" id="formTempNozzle" list="tempNozzleList" placeholder="np. 210-220"
+                            class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500">
+                        <datalist id="tempNozzleList"></datalist>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-300 mb-1">Temp. stołu (°C)</label>
+                        <input type="text" id="formTempBed" list="tempBedList" placeholder="np. 55-60"
+                            class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500">
+                        <datalist id="tempBedList"></datalist>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-300 mb-1">Status</label>
+                        <select id="formStatus" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500">
+                            <option value="W użyciu">W użyciu</option>
+                            <option value="Nowa">Nowa (Zafoliowana)</option>
+                            <option value="Końcówka">Końcówka</option>
+                            <option value="Pusta">Zużyta / Pusta</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Notatki -->
+                <div>
+                    <label class="block text-xs text-slate-300 mb-1">Uwagi / Parametry druku</label>
+                    <textarea id="formNotes" rows="2" placeholder="np. wymaga suszenia 4h w 50°C, flow 0.96, rewelacyjna adhezja"
+                        class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500"></textarea>
+                </div>
+
+                <!-- Przyciski formularza -->
+                <div class="pt-4 border-t border-slate-800 flex justify-end gap-3">
+                    <button type="button" onclick="closeModal('filamentModal')" class="px-4 py-2 rounded-xl border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700 text-xs font-medium">
+                        Anuluj
+                    </button>
+                    <button type="submit" id="btnSaveFilament" class="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-semibold shadow-lg shadow-cyan-500/20 flex items-center gap-1.5">
+                        <i data-lucide="check" class="w-4 h-4"></i>
+                        Zapisz szpulę
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- MODAL: Ustawienia połączenia Supabase                                 -->
+    <!-- ===================================================================== -->
+    <div id="settingsModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-2xl shadow-2xl p-6 relative">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+                <h2 class="text-base font-bold text-slate-100 flex items-center gap-2">
+                    <i data-lucide="database" class="w-5 h-5 text-cyan-400"></i>
+                    Połączenie z Supabase Cloud
+                </h2>
+                <button type="button" onclick="closeModal('settingsModal')" class="text-slate-400 hover:text-slate-200">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <p class="text-xs text-slate-400 mb-4">
+                Dane znajdziesz w panelu swojego projektu na <a href="https://supabase.com/dashboard" target="_blank" class="text-cyan-400 underline">supabase.com</a> w zakładce <strong>Project Settings &rarr; API</strong>.
+            </p>
+
+            <form id="settingsForm" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">Project URL</label>
+                    <input type="text" id="settingsSupabaseUrl" placeholder="https://xyzabcdefg.supabase.co"
+                        class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-cyan-500">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">Project API Key (anon / public)</label>
+                    <input type="password" id="settingsSupabaseKey" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                        class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-cyan-500">
+                </div>
+
+                <div id="testConnectionResult" class="hidden text-xs p-2.5 rounded-lg"></div>
+
+                <div class="pt-4 border-t border-slate-800 flex justify-between items-center gap-2">
+                    <button type="button" id="btnTestConnection" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 flex items-center gap-1.5">
+                        <i data-lucide="zap" class="w-3.5 h-3.5"></i>
+                        Testuj połączenie
+                    </button>
+                    <div class="flex gap-2">
+                        <button type="button" onclick="closeModal('settingsModal')" class="px-3.5 py-2 rounded-xl bg-slate-800 text-slate-400 text-xs">
+                            Anuluj
+                        </button>
+                        <button type="submit" class="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold">
+                            Zapisz i połącz
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Skrypty aplikacji -->
+    <script src="config.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
