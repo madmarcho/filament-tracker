@@ -9,8 +9,8 @@ export async function onRequest(context) {
 
     // Domyślny login i hasło:
     // Możesz je zmienić poniżej LUB ustawić w panelu Cloudflare Pages (Settings -> Variables and secrets)
-    const expectedUser = env.AUTH_USER || 'marcin';
-    const expectedPass = env.AUTH_PASS || 'filament2026';
+    const expectedUser = env.AUTH_USER || 'Marcin';
+    const expectedPass = env.AUTH_PASS || 'Amiga13Filament!!';
 
     const authHeader = request.headers.get('Authorization');
 
