@@ -1,10 +1,9 @@
 // ==============================================================================
-// 3D FILAMENT TRACKER - APLIKACJA GŁÓWNA
+// 3D FILAMENT TRACKER - APLIKACJA GŁÓWNA (CLOUDFLARE PAGES + D1)
 // ==============================================================================
 
 // Stan aplikacji
 const state = {
-    supabaseClient: null,
     isOnline: false,
     filaments: [],
     viewMode: 'table', // domyślny widok listy (tabela)
@@ -19,7 +18,7 @@ const state = {
     }
 };
 
-// Przykładowe dane demonstracyjne (gdy Supabase nie jest jeszcze skonfigurowane)
+// Przykładowe dane demonstracyjne (gdy aplikacja działa lokalnie / offline)
 const DEMO_DATA = [
     {
         id: 'demo-1',
@@ -107,93 +106,56 @@ function initIcons() {
 }
 
 // ------------------------------------------------------------------------------
-// Konfiguracja i połączenie z Supabase
+// Połączenie z Cloudflare D1 (Pages Functions /api/filaments)
 // ------------------------------------------------------------------------------
-function cleanSupabaseUrl(input) {
-    if (!input) return '';
-    let url = input.trim();
-
-    // Jeśli wklejono adres z paska adresu dashboardu (np. https://supabase.com/dashboard/project/xyz/...)
-    const dashMatch = url.match(/supabase\.com\/dashboard\/project\/([a-z0-9_-]+)/i);
-    if (dashMatch && dashMatch[1]) {
-        url = `https://${dashMatch[1]}.supabase.co`;
-    }
-
-    // Jeśli brakuje https://
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-        url = 'https://' + url;
-    }
-
-    // Usunięcie ewentualnych zbędnych ścieżek na końcu
-    url = url.replace(/\/rest\/v1\/?$/i, '');
-    url = url.replace(/\/rest\/?$/i, '');
-    url = url.replace(/\/auth\/v1\/?$/i, '');
-    url = url.replace(/\/+$/, '');
-
-    return url;
-}
-
-function getSupabaseConfig() {
-    const storedUrl = localStorage.getItem('filament_sb_url');
-    const storedKey = localStorage.getItem('filament_sb_key');
-
-    const configUrl = window.APP_CONFIG?.SUPABASE_URL || '';
-    const configKey = window.APP_CONFIG?.SUPABASE_ANON_KEY || '';
-
-    return {
-        url: cleanSupabaseUrl(storedUrl || configUrl),
-        key: (storedKey || configKey).trim()
-    };
-}
-
 async function connectAndLoad() {
-    const { url, key } = getSupabaseConfig();
     const connectionBadge = document.getElementById('connectionBadge');
     const unconfiguredBanner = document.getElementById('unconfiguredBanner');
-
-    if (!url || !key) {
-        state.isOnline = false;
-        state.supabaseClient = null;
-        connectionBadge.className = 'text-xs px-2 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20';
-        connectionBadge.innerHTML = 'Tryb Demo';
-        unconfiguredBanner.classList.remove('hidden');
-
-        // Wczytaj z localStorage lub użyj danych demo
-        const local = localStorage.getItem('filament_demo_items');
-        state.filaments = local ? JSON.parse(local) : [...DEMO_DATA];
-        render();
-        return;
-    }
+    const cfStatusBadge = document.getElementById('cfStatusBadge');
 
     try {
-        if (!window.supabase) {
-            throw new Error('Biblioteka Supabase nie została załadowana.');
+        const response = await fetch('/api/filaments', {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' }
+        });
+
+        if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.error || `Błąd serwera (${response.status})`);
         }
 
-        state.supabaseClient = window.supabase.createClient(url, key);
-        
-        // Próba pobrania danych z tabeli filaments
-        const { data, error } = await state.supabaseClient
-            .from('filaments')
-            .select('*')
-            .order('created_at', { ascending: false });
-
-        if (error) {
-            throw error;
-        }
+        const data = await response.json();
 
         state.isOnline = true;
-        state.filaments = data || [];
-        connectionBadge.className = 'text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
-        connectionBadge.innerHTML = '<span class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1 animate-pulse"></span>Supabase Połączone';
-        unconfiguredBanner.classList.add('hidden');
+        state.filaments = Array.isArray(data) ? data : [];
+
+        if (connectionBadge) {
+            connectionBadge.className = 'text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+            connectionBadge.innerHTML = '<span class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1 animate-pulse"></span>Cloudflare D1';
+        }
+        if (cfStatusBadge) {
+            cfStatusBadge.className = 'text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+            cfStatusBadge.textContent = 'Połączono z Cloudflare D1';
+        }
+        if (unconfiguredBanner) {
+            unconfiguredBanner.classList.add('hidden');
+        }
     } catch (err) {
-        console.warn('Błąd połączenia z Supabase:', err);
+        console.warn('Tryb lokalny / brak endpointu Cloudflare API:', err.message);
         state.isOnline = false;
-        connectionBadge.className = 'text-xs px-2 py-0.5 rounded-full font-medium bg-red-500/10 text-red-400 border border-red-500/20';
-        connectionBadge.innerHTML = 'Błąd połączenia';
-        unconfiguredBanner.classList.remove('hidden');
-        
+
+        if (connectionBadge) {
+            connectionBadge.className = 'text-xs px-2 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20';
+            connectionBadge.innerHTML = 'Tryb Offline / Demo';
+        }
+        if (cfStatusBadge) {
+            cfStatusBadge.className = 'text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30';
+            cfStatusBadge.textContent = 'Tryb lokalny / Offline';
+        }
+        if (unconfiguredBanner) {
+            unconfiguredBanner.classList.remove('hidden');
+        }
+
         // Awaryjnie załaduj dane lokalne
         const local = localStorage.getItem('filament_demo_items');
         state.filaments = local ? JSON.parse(local) : [...DEMO_DATA];
@@ -203,9 +165,7 @@ async function connectAndLoad() {
 }
 
 function initSettings() {
-    const { url, key } = getSupabaseConfig();
-    document.getElementById('settingsSupabaseUrl').value = url;
-    document.getElementById('settingsSupabaseKey').value = key;
+    // Cloudflare D1 łączy się bezpośrednio w Pages Functions bez kluczy w przeglądarce
 }
 
 // ------------------------------------------------------------------------------
@@ -252,48 +212,33 @@ function initEventListeners() {
     // Formularz filamentu
     document.getElementById('filamentForm').addEventListener('submit', handleSaveFilament);
 
-    // Formularz ustawień
-    document.getElementById('settingsForm').addEventListener('submit', async (e) => {
+    // Formularz / Odświeżanie Cloudflare D1
+    document.getElementById('settingsForm')?.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const rawUrl = document.getElementById('settingsSupabaseUrl').value;
-        const key = document.getElementById('settingsSupabaseKey').value.trim();
-        const url = cleanSupabaseUrl(rawUrl);
-
-        document.getElementById('settingsSupabaseUrl').value = url;
-        localStorage.setItem('filament_sb_url', url);
-        localStorage.setItem('filament_sb_key', key);
-
         closeModal('settingsModal');
         await connectAndLoad();
     });
 
-    // Test połączenia
-    document.getElementById('btnTestConnection').addEventListener('click', async () => {
-        const rawUrl = document.getElementById('settingsSupabaseUrl').value;
-        const key = document.getElementById('settingsSupabaseKey').value.trim();
-        const url = cleanSupabaseUrl(rawUrl);
-        document.getElementById('settingsSupabaseUrl').value = url;
-
+    // Test / ponowne sprawdzenie połączenia z Cloudflare D1
+    document.getElementById('btnTestConnection')?.addEventListener('click', async () => {
         const resultDiv = document.getElementById('testConnectionResult');
+        if (resultDiv) {
+            resultDiv.className = 'text-xs p-2.5 rounded-lg bg-slate-800 text-slate-300 block';
+            resultDiv.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 inline animate-spin mr-1"></i> Sprawdzanie endpointu /api/filaments...';
+            initIcons();
+        }
 
-        resultDiv.className = 'text-xs p-2.5 rounded-lg bg-slate-800 text-slate-300 block';
-        resultDiv.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 inline animate-spin mr-1"></i> Testowanie połączenia...';
-        initIcons();
+        await connectAndLoad();
 
-        try {
-            if (!url) throw new Error('Podaj Project URL');
-            if (!key) throw new Error('Podaj klucz anon / public');
-
-            const client = window.supabase.createClient(url, key);
-            const { error } = await client.from('filaments').select('id').limit(1);
-
-            if (error) throw error;
-
-            resultDiv.className = 'text-xs p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 block';
-            resultDiv.innerHTML = '✓ Sukces! Połączenie z bazą Supabase działa prawidłowo.';
-        } catch (err) {
-            resultDiv.className = 'text-xs p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 block';
-            resultDiv.innerHTML = `✕ Błąd połączenia: ${err.message || 'Nieznany błąd'}.`;
+        if (resultDiv) {
+            if (state.isOnline) {
+                resultDiv.className = 'text-xs p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 block';
+                resultDiv.innerHTML = '✓ Sukces! Baza Cloudflare D1 jest połączona i odpowiada prawidłowo.';
+            } else {
+                resultDiv.className = 'text-xs p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 block';
+                resultDiv.innerHTML = 'Brak odpowiedzi z API Cloudflare (/api/filaments). Upewnij się, że projekt został wdrożony na Cloudflare Pages i baza D1 została powiązana pod nazwą "DB".';
+            }
+            initIcons();
         }
     });
 
@@ -919,18 +864,27 @@ async function handleSaveFilament(e) {
     initIcons();
 
     try {
-        if (state.isOnline && state.supabaseClient) {
+        if (state.isOnline) {
             if (isEdit) {
-                const { error } = await state.supabaseClient
-                    .from('filaments')
-                    .update(payload)
-                    .eq('id', id);
-                if (error) throw error;
+                const response = await fetch('/api/filaments/' + encodeURIComponent(id), {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.error || 'Błąd aktualizacji szpuli');
+                }
             } else {
-                const { error } = await state.supabaseClient
-                    .from('filaments')
-                    .insert([payload]);
-                if (error) throw error;
+                const response = await fetch('/api/filaments', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.error || 'Błąd dodawania szpuli');
+                }
             }
             await connectAndLoad();
         } else {
@@ -953,6 +907,7 @@ async function handleSaveFilament(e) {
         }
 
         closeModal('filamentModal');
+        showToast(isEdit ? 'Zaktualizowano szpulę!' : 'Dodano nową szpulę do bazy!', 'success');
     } catch (err) {
         alert('Błąd podczas zapisywania: ' + (err.message || 'Nieznany błąd'));
         console.error(err);
@@ -982,12 +937,16 @@ async function quickUpdateWeight(id) {
     else if (newStatus === 'Pusta' || newStatus === 'Nowa') newStatus = 'W użyciu';
 
     try {
-        if (state.isOnline && state.supabaseClient) {
-            const { error } = await state.supabaseClient
-                .from('filaments')
-                .update({ weight_current: newWeight, status: newStatus })
-                .eq('id', id);
-            if (error) throw error;
+        if (state.isOnline) {
+            const response = await fetch('/api/filaments/' + encodeURIComponent(id), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ weight_current: newWeight, status: newStatus })
+            });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.error || 'Błąd aktualizacji wagi');
+            }
             await connectAndLoad();
         } else {
             item.weight_current = newWeight;
@@ -995,6 +954,7 @@ async function quickUpdateWeight(id) {
             localStorage.setItem('filament_demo_items', JSON.stringify(state.filaments));
             render();
         }
+        showToast('Zaktualizowano wagę szpuli!', 'success');
     } catch (err) {
         alert('Błąd aktualizacji: ' + err.message);
     }
@@ -1009,18 +969,21 @@ async function deleteFilament(id) {
     }
 
     try {
-        if (state.isOnline && state.supabaseClient) {
-            const { error } = await state.supabaseClient
-                .from('filaments')
-                .delete()
-                .eq('id', id);
-            if (error) throw error;
+        if (state.isOnline) {
+            const response = await fetch('/api/filaments/' + encodeURIComponent(id), {
+                method: 'DELETE'
+            });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.error || 'Błąd usuwania szpuli');
+            }
             await connectAndLoad();
         } else {
             state.filaments = state.filaments.filter(f => f.id !== id);
             localStorage.setItem('filament_demo_items', JSON.stringify(state.filaments));
             render();
         }
+        showToast('Usunięto szpulę z bazy.', 'info');
     } catch (err) {
         alert('Błąd podczas usuwania: ' + err.message);
     }
@@ -1649,24 +1612,19 @@ async function executeRestore() {
             return clean;
         });
 
-        if (state.isOnline && state.supabaseClient) {
-            if (mode === 'replace') {
-                // Usuń wszystkie istniejące szpule
-                const { error: delError } = await state.supabaseClient
-                    .from('filaments')
-                    .delete()
-                    .neq('id', '00000000-0000-0000-0000-000000000000');
-                if (delError) throw delError;
-            }
+        if (state.isOnline) {
+            const response = await fetch('/api/restore', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode,
+                    filaments: sanitizedItems
+                })
+            });
 
-            // Wstawiaj partiami po 50 sztuk
-            const chunkSize = 50;
-            for (let i = 0; i < sanitizedItems.length; i += chunkSize) {
-                const chunk = sanitizedItems.slice(i, i + chunkSize);
-                const { error: insError } = await state.supabaseClient
-                    .from('filaments')
-                    .insert(chunk);
-                if (insError) throw insError;
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.error || 'Błąd podczas przywracania danych w Cloudflare D1');
             }
 
             await connectAndLoad();

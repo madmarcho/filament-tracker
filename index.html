@@ -30,8 +30,6 @@
     </script>
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
-    <!-- Supabase JS Client v2 -->
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <!-- xlsx-js-style (Excel .xlsx z obsługą stylów komórek i kolorów) -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.min.js"></script>
     <script>
@@ -110,9 +108,9 @@
                     <span class="hidden sm:inline">Kopia & Eksport</span>
                 </button>
 
-                <button id="btnOpenSettings" title="Konfiguracja połączenia z Supabase"
+                <button id="btnOpenSettings" title="Status połączenia z Cloudflare D1"
                     class="p-2.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 hover:text-cyan-400 text-slate-300 transition-colors">
-                    <i data-lucide="settings" class="w-4 h-4"></i>
+                    <i data-lucide="cloud" class="w-4 h-4"></i>
                 </button>
 
                 <button id="btnOpenAddModal"
@@ -127,17 +125,17 @@
     <!-- Główna zawartość -->
     <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
-        <!-- Komunikat o braku połączenia z Supabase (jeśli brak kluczy) -->
+        <!-- Komunikat o trybie lokalnym / braku połączenia z Cloudflare API -->
         <div id="unconfiguredBanner" class="hidden mb-6 p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div class="flex items-start gap-3">
-                <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-400 mt-0.5 flex-shrink-0"></i>
+                <i data-lucide="cloud-off" class="w-5 h-5 text-amber-400 mt-0.5 flex-shrink-0"></i>
                 <div>
-                    <h3 class="font-semibold text-amber-300">Aplikacja działa w trybie demonstracyjnym</h3>
-                    <p class="text-sm text-amber-200/80">Aby zapisywać i synchronizować szpule w darmowej chmurze Supabase, podaj adres URL i klucz Anon.</p>
+                    <h3 class="font-semibold text-amber-300">Aplikacja działa w trybie offline / demonstracyjnym</h3>
+                    <p class="text-sm text-amber-200/80">Szpule zapisują się lokalnie w przeglądarce. Po wdrożeniu na Cloudflare Pages z powiązaną bazą D1, synchronizacja w chmurze uruchomi się automatycznie.</p>
                 </div>
             </div>
             <button onclick="document.getElementById('btnOpenSettings').click()" class="whitespace-nowrap px-4 py-1.5 rounded-lg bg-amber-500 text-slate-950 font-semibold text-xs hover:bg-amber-400 transition-colors">
-                Połącz z Supabase
+                Status chmury
             </button>
         </div>
 
@@ -449,54 +447,68 @@
     </div>
 
     <!-- ===================================================================== -->
-    <!-- MODAL: Ustawienia połączenia Supabase                                 -->
+    <!-- MODAL: Status połączenia Cloudflare D1                                -->
     <!-- ===================================================================== -->
     <div id="settingsModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
         <div class="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-2xl shadow-2xl p-6 relative">
             <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
-                <h2 class="text-base font-bold text-slate-100 flex items-center gap-2">
-                    <i data-lucide="database" class="w-5 h-5 text-cyan-400"></i>
-                    Połączenie z Supabase Cloud
-                </h2>
+                <div class="flex items-center gap-2.5">
+                    <div class="w-8 h-8 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-400 flex items-center justify-center">
+                        <i data-lucide="cloud" class="w-4 h-4"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-base font-bold text-slate-100">Baza danych Cloudflare D1</h2>
+                        <p class="text-xs text-slate-400">Serverless SQL w ekosystemie Cloudflare</p>
+                    </div>
+                </div>
                 <button type="button" onclick="closeModal('settingsModal')" class="text-slate-400 hover:text-slate-200">
                     <i data-lucide="x" class="w-5 h-5"></i>
                 </button>
             </div>
 
-            <p class="text-xs text-slate-400 mb-4">
-                Dane znajdziesz w panelu swojego projektu na <a href="https://supabase.com/dashboard" target="_blank" class="text-cyan-400 underline">supabase.com</a> w zakładce <strong>Project Settings &rarr; API</strong>.
-            </p>
-
-            <form id="settingsForm" class="space-y-4">
-                <div>
-                    <label class="block text-xs font-semibold text-slate-300 mb-1">Project URL</label>
-                    <input type="text" id="settingsSupabaseUrl" placeholder="https://xyzabcdefg.supabase.co"
-                        class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-cyan-500">
-                </div>
-
-                <div>
-                    <label class="block text-xs font-semibold text-slate-300 mb-1">Project API Key (anon / public)</label>
-                    <input type="password" id="settingsSupabaseKey" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                        class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-cyan-500">
-                </div>
-
-                <div id="testConnectionResult" class="hidden text-xs p-2.5 rounded-lg"></div>
-
-                <div class="pt-4 border-t border-slate-800 flex justify-between items-center gap-2">
-                    <button type="button" id="btnTestConnection" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 flex items-center gap-1.5">
-                        <i data-lucide="zap" class="w-3.5 h-3.5"></i>
-                        Testuj połączenie
-                    </button>
-                    <div class="flex gap-2">
-                        <button type="button" onclick="closeModal('settingsModal')" class="px-3.5 py-2 rounded-xl bg-slate-800 text-slate-400 text-xs">
-                            Anuluj
-                        </button>
-                        <button type="submit" class="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold">
-                            Zapisz i połącz
-                        </button>
+            <div class="space-y-3 mb-4">
+                <div class="p-3 bg-slate-950/60 border border-slate-800/80 rounded-xl space-y-2 text-xs">
+                    <div class="flex items-center justify-between">
+                        <span class="text-slate-400">Status połączenia:</span>
+                        <span id="cfStatusBadge" class="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">Sprawdzanie...</span>
+                    </div>
+                    <div class="flex items-center justify-between border-t border-slate-800/60 pt-2">
+                        <span class="text-slate-400">Punkt końcowy API:</span>
+                        <code class="text-cyan-400 font-mono">/api/filaments</code>
+                    </div>
+                    <div class="flex items-center justify-between border-t border-slate-800/60 pt-2">
+                        <span class="text-slate-400">Powiązanie bazy (Binding):</span>
+                        <span class="text-slate-300 font-mono font-medium">DB (Cloudflare D1)</span>
+                    </div>
+                    <div class="flex items-center justify-between border-t border-slate-800/60 pt-2">
+                        <span class="text-slate-400">Klucze w przeglądarce:</span>
+                        <span class="text-emerald-400 font-medium flex items-center gap-1">
+                            <i data-lucide="shield-check" class="w-3.5 h-3.5"></i> Bezpieczne (brak kluczy w kodzie klienta)
+                        </span>
                     </div>
                 </div>
-            </form>
+
+                <p class="text-[11px] text-slate-400 leading-relaxed">
+                    W ekosystemie Cloudflare Pages połączenie z bazą D1 realizowane jest automatycznie po stronie serwera przez wbudowane Pages Functions. Nie musisz wprowadzać żadnych haseł ani kluczy API.
+                </p>
+
+                <div id="testConnectionResult" class="hidden text-xs p-2.5 rounded-lg"></div>
+            </div>
+
+            <div class="pt-4 border-t border-slate-800 flex justify-between items-center gap-2">
+                <button type="button" id="btnTestConnection" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 flex items-center gap-1.5 transition-colors">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                    Sprawdź status D1
+                </button>
+                <div class="flex gap-2">
+                    <a href="https://dash.cloudflare.com" target="_blank" rel="noopener noreferrer" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs flex items-center gap-1">
+                        Panel Cloudflare <i data-lucide="external-link" class="w-3 h-3"></i>
+                    </a>
+                    <button type="button" onclick="closeModal('settingsModal')" class="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold">
+                        Zamknij
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -690,7 +702,6 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
 
     <!-- Skrypty aplikacji -->
-    <script src="config.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
